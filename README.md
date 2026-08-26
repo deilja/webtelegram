@@ -1,124 +1,114 @@
-# СКРИПТ РАБОТАЕТ В БЕТА ВЕРСИИ И БУДЕТ ОБНОВЛЯТЬСЯ УБЕДИТЕЛЬНАЯ ПРОСЬБА НЕ СТАВИТЬ СКРИПТ НА VPS В КОТОРОМ У ВАС УЖЕ ЧТО-ТО УСТАНОВЛЕНО 
+# Telegram Web Proxy — Ubuntu 24.04
 
-# Telegram Web Proxy — установка на Ubuntu 24.04
-Автоматическая установка Telegram Web Proxy на новый VPS.
+Production-ready installer for Telegram Web Proxy on **Ubuntu 24.04 x86_64**.
 
-В проекте используются:
+Проект использует:
 
 - MTProxy
 - `tproxy-server`
 - Caddy
-- HTTPS-сертификат
+- HTTPS / Let's Encrypt
 - systemd
-- универсальная HTML-заглушка
+- nftables
+- HTML-заглушку
 
-Панель управления в этой версии **не используется**.
-
----
-
-## 1. Что понадобится
-
-Новый VPS:
-
-[АРЕНДОВАТЬ VPS И ДОМЕН МОЖНО ТУТ](https://play2go.cloud/?ref_id=m1o4quWG0sE)
-
-```text
-Ubuntu 24.04
-x86_64
-root-доступ
-```
-
-Также нужен домен или поддомен.
-
-Пример:
-
-```text
-proxy.example.com
-```
-
-Создайте DNS A-запись:
-
-```text
-proxy.example.com → IP-адрес вашего VPS
-```
-
-Порты `80` и `443` должны быть свободны.
+Upstream `tproxy-server` фиксируется на проверенном commit, чтобы установка не зависела от случайных изменений `master`.
 
 ---
 
-# 2. Установка в одну команду
+## Требования
 
-На VPS выполните одну команду:
+### Вариант A — новый VPS
+
+- Ubuntu 24.04 x86_64
+- root-доступ
+- домен или поддомен
+- DNS A-запись на IPv4 VPS
+- порты TCP 80 и 443 свободны
+
+### Вариант B — рабочий сервер с существующим Caddy
+
+Используйте отдельный установщик:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/POLESNIESOVETI12/webtelegram/main/install-webproxy.sh -o /root/install-webproxy.sh && chmod +x /root/install-webproxy.sh && /root/install-webproxy.sh
+curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/install-webproxy-existing-caddy.sh -o /root/install-webproxy-existing-caddy.sh
+chmod 700 /root/install-webproxy-existing-caddy.sh
+/root/install-webproxy-existing-caddy.sh
 ```
 
-После запуска установщик попросит:
+Он не заменяет основной Caddyfile и выполняет reload Caddy после добавления отдельной конфигурации. Перед изменениями создаётся backup.
+
+> Если сервер использует nginx вместо Caddy, этот режим не применяется. Не заменяйте nginx автоматически: сначала добавьте отдельный reverse-proxy location вручную или используйте специальный nginx-интегратор.
+
+---
+
+## Быстрая установка на чистый VPS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/install-webproxy.sh -o /root/install-webproxy.sh
+chmod 700 /root/install-webproxy.sh
+/root/install-webproxy.sh
+```
+
+Установщик запросит:
 
 ```text
 Domain (example: proxy.example.com):
-ACME email (example: admin@example.com):
+ACME email:
 Generate a secure secret automatically? [Y/n]:
 ```
 
-Например:
-
-```text
-Domain (example: proxy.example.com): proxy.example.com
-ACME email (example: admin@example.com): admin@example.com
-Generate a secure secret automatically? [Y/n]: y
-```
-
-Дальше установка выполняется автоматически.
+Секрет рекомендуется генерировать автоматически.
 
 ---
 
-# 3. Что делает установщик
+## Что проверяет установщик
 
-Скрипт:
+Перед изменением системы выполняются проверки:
 
-```text
-Проверяет систему
-        ↓
-Проверяет DNS
-        ↓
-Проверяет порты 80/443
-        ↓
-Устанавливает зависимости
-        ↓
-Создаёт сайт-заглушку
-        ↓
-Устанавливает MTProxy
-        ↓
-Собирает tproxy-server
-        ↓
-Настраивает systemd
-        ↓
-Настраивает Caddy
-        ↓
-Получает HTTPS-сертификат
-        ↓
-Запускает сервисы
-        ↓
-Проверяет MTProxy :2398
-        ↓
-Проверяет relay /readyz
-        ↓
-Проверяет /healthz
-        ↓
-Ждёт HTTPS до 120 секунд
-        ↓
-Проверяет HTTPS
-        ↓
-Показывает Telegram Web Proxy
-```
+1. root-доступ;
+2. Ubuntu 24.04;
+3. архитектура x86_64;
+4. DNS A;
+5. DNS AAAA, если он существует;
+6. соответствие DNS публичному адресу VPS;
+7. занятость портов;
+8. наличие Caddy/nginx;
+9. UFW;
+10. контрольная версия upstream `tproxy-server`.
+
+Установщик не пытается забрать 80/443 у уже работающего веб-сервера.
 
 ---
 
-# 4. Что появится в конце
+## Архитектура
 
-После успешной установки вы увидите примерно:
+```text
+Internet
+   |
+   +-- TCP 443 --> Caddy
+   |                 |
+   |                 +--> 127.0.0.1:8080
+   |                          |
+   |                          v
+   |                    tproxy-server
+   |                          |
+   |                          v
+   |                    127.0.0.1:2398
+   |                          |
+   |                          v
+   |                       MTProxy
+   |
+   +-- TCP 80 --> Caddy / ACME
+```
+
+Backend-порты не должны быть доступны из интернета.
+
+---
+
+## После установки
+
+При успешной установке отображаются:
 
 ```text
 ============================================================
@@ -134,7 +124,6 @@ Secret:
 Telegram Web Proxy:
   https://t.me/webproxy?server=proxy.example.com&secret=************************
 
-
 Status:
   HTTPS          OK
   MTProxy        ACTIVE
@@ -143,187 +132,152 @@ Status:
 ============================================================
 ```
 
-**Secret никому не передавайте и не публикуйте.**
+**Secret — чувствительные данные. Не публикуйте его и не помещайте в публичные issue/logs.**
 
 ---
 
-# 5. Полное удаление установки
-
-Для удаления Telegram Web Proxy используйте:
+## Проверка после установки
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/POLESNIESOVETI12/webtelegram/main/uninstall-webproxy.sh -o /tmp/uninstall-webproxy.sh && chmod +x /tmp/uninstall-webproxy.sh && /tmp/uninstall-webproxy.sh
+systemctl is-active mtproxy
+systemctl is-active tproxy-server
+systemctl is-active caddy
+ss -lntp | grep -E ':(80|443|2398|8080|8081)\b'
 ```
 
-Деинсталлятор попросит подтвердить удаление:
+Ожидаемая модель:
+
+- `80/tcp` — Caddy;
+- `443/tcp` — Caddy;
+- `2398/tcp` — только localhost;
+- `8080/tcp` — только localhost;
+- `8081/tcp` — только localhost.
+
+Проверка локального relay:
+
+```bash
+curl -fsS http://127.0.0.1:8081/readyz
+```
+
+Проверка HTTPS:
+
+```bash
+curl -fsSI https://proxy.example.com/
+```
+
+---
+
+## Существующий Caddy
+
+Используйте:
 
 ```text
-REMOVE
+install-webproxy-existing-caddy.sh
 ```
 
-После этого будут удалены компоненты Telegram Web Proxy, Caddy, конфигурация, сайт и созданные сервисы.
+Принцип:
+
+```text
+Существующий Caddy
+        |
+        +-- существующие сайты остаются без изменений
+        |
+        +-- новый host --> tproxy-server :8080
+```
+
+Перед изменением Caddy создаётся backup в:
+
+```text
+/root/webproxy-backups/
+```
+
+Основной Caddyfile не заменяется целиком.
 
 ---
 
+## Если порт 80 или 443 занят
 
-# 6. Как заменить HTML-заглушку
-
-Сайт-заглушка находится здесь:
-
-```bash
-/srv/tproxy-site/index.html
-```
-
-Открыть:
-
-```bash
-nano /srv/tproxy-site/index.html
-```
-
-Можно заменить HTML на свой.
-
-Сохранить файл 
-Ctrl+O
-Enter
-Ctrl+X
-
-После изменения:
-
-```bash
-chown -R root:root /srv/tproxy-site
-find /srv/tproxy-site -type d -exec chmod 0755 {} \;
-find /srv/tproxy-site -type f -exec chmod 0644 {} \;
-```
-
-После этого обновите страницу в браузере.
-
-Caddy перезапускать не требуется.
-
----
-
-# 7. Готовая HTML-заглушка
-
-Пример простой страницы:
-
-```html
-<!doctype html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>Подключение</title>
-
-    <style>
-        :root {
-            color-scheme: dark;
-            --bg: #0a0d12;
-            --card: #11161f;
-            --text: #f5f7fb;
-            --muted: #8f99a8;
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            min-height: 100vh;
-            display: grid;
-            place-items: center;
-            padding: 24px;
-            background: var(--bg);
-            color: var(--text);
-            font-family: system-ui, sans-serif;
-        }
-
-        .card {
-            width: min(100%, 560px);
-            padding: 38px 30px;
-            text-align: center;
-            background: var(--card);
-            border: 1px solid #242c38;
-            border-radius: 22px;
-        }
-
-        h1 {
-            margin: 0;
-            font-size: 32px;
-        }
-
-        p {
-            color: var(--muted);
-        }
-
-        .loader {
-            width: min(100%, 320px);
-            height: 8px;
-            margin: 28px auto;
-            overflow: hidden;
-            border-radius: 999px;
-            background: #202733;
-        }
-
-        .loader::before {
-            content: "";
-            display: block;
-            width: 34%;
-            height: 100%;
-            background: #fff;
-            border-radius: inherit;
-            animation: loading 1.25s ease-in-out infinite;
-        }
-
-        @keyframes loading {
-            0% {
-                transform: translateX(-120%);
-            }
-
-            50% {
-                transform: translateX(190%);
-            }
-
-            100% {
-                transform: translateX(320%);
-            }
-        }
-    </style>
-</head>
-
-<body>
-
-<main class="card">
-    <h1>Подключение</h1>
-
-    <p>
-        Пожалуйста, подождите.<br>
-        Идёт загрузка страницы.
-    </p>
-
-    <div class="loader"></div>
-</main>
-
-</body>
-</html>
-```
-
----
-
-
-
-
-# 8. Если порт 80 или 443 занят
-
-Проверьте:
+Проверить:
 
 ```bash
 ss -lntp | grep -E ':(80|443)\b'
 ```
 
-Установщик специально останавливается, если эти порты уже заняты.
+Для чистой установки это ожидаемая причина остановки. Не останавливайте работающий production-сервис вслепую.
 
 ---
 
+## UFW
 
+Если UFW активен, должны быть разрешены:
 
+```bash
+ufw allow 80/tcp
+ufw allow 443/tcp
+```
+
+Не открывайте наружу backend-порты `2398`, `8080` и `8081`.
+
+---
+
+## HTML-заглушка
+
+Основная страница:
+
+```text
+/srv/tproxy-site/index.html
+```
+
+После изменения файла перезапуск Caddy обычно не требуется.
+
+Не меняйте владельца и права на произвольные значения: установщик использует отдельного системного пользователя для доступа к файлам.
+
+---
+
+## Удаление
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/uninstall-webproxy.sh -o /tmp/uninstall-webproxy.sh
+chmod 700 /tmp/uninstall-webproxy.sh
+/tmp/uninstall-webproxy.sh
+```
+
+Перед удалением обязательно проверьте, не используется ли Caddy другими сайтами.
+
+---
+
+## Безопасность
+
+Установщик:
+
+- работает только от root;
+- ограничен Ubuntu 24.04 x86_64;
+- проверяет DNS до установки;
+- фиксирует upstream `tproxy-server` на commit;
+- проверяет SHA-512 архива Caddy;
+- использует отдельные systemd users;
+- применяет systemd hardening;
+- хранит секреты с ограниченными правами;
+- держит backend на localhost;
+- не перезаписывает существующий nginx/Caddy в режиме чистой установки;
+- сохраняет backup при интеграции с существующим Caddy.
+
+Не запускайте непроверенные копии installer от сторонних лиц.
+
+---
+
+## CI
+
+Для shell-кода проекта используется GitHub Actions с:
+
+- `bash -n`;
+- ShellCheck;
+- статическими security-проверками.
+
+Перед production-релизом проверяйте последний успешный workflow.
+
+---
+
+## Репозиторий
+
+[deilja/webtelegram](https://github.com/deilja/webtelegram)
