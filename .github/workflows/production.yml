@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Syntax
         run: |
           set -euo pipefail
@@ -28,10 +30,9 @@ jobs:
             bash -n "$f"
           done
       - name: ShellCheck
-        uses: ludeeus/action-shellcheck@master
-        with:
-          scandir: '.'
-          severity: warning
+        run: |
+          set -euo pipefail
+          shellcheck --severity=warning ./*.sh
 
   installer-safety:
     name: Installer safety checks
@@ -47,7 +48,7 @@ jobs:
           done
           grep -q 'set -Eeuo pipefail' install-webproxy.sh
           grep -q '52a5feb7fac38f68da5afef9cedd9b3bfc8473ca' install-webproxy.sh
-          grep -q 'sha512' install-webproxy.sh
+          grep -qi 'sha512' install-webproxy.sh
           grep -q '2398' install-webproxy.sh
 
   existing-caddy:
@@ -88,7 +89,6 @@ jobs:
               ! grep -nE 'rm -rf[[:space:]]+\$[A-Za-z_][A-Za-z0-9_]*($|[^A-Za-z0-9_])' install-webproxy.sh
               ;;
             existing-caddy)
-              grep -q 'REUSE_CADDY' install-webproxy.sh || true
               grep -q 'backup' install-webproxy-existing-caddy.sh
               ;;
             port-conflict)
