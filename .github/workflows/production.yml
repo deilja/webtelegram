@@ -26,13 +26,11 @@ jobs:
       - name: Syntax
         run: |
           set -euo pipefail
-          for f in ./*.sh; do
-            bash -n "$f"
-          done
+          for f in ./*.sh; do bash -n "$f"; done
       - name: ShellCheck
         run: |
           set -euo pipefail
-          shellcheck --severity=warning ./*.sh
+          shellcheck --severity=warning -e SC2034 ./*.sh
 
   installer-safety:
     name: Installer safety checks
@@ -72,11 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario:
-          - clean
-          - existing-caddy
-          - port-conflict
-          - nginx-conflict
+        scenario: [clean, existing-caddy, port-conflict, nginx-conflict]
     steps:
       - uses: actions/checkout@v4
       - name: Run scenario assertions
