@@ -7,7 +7,7 @@ WEB_INSTALLER_URL="https://raw.githubusercontent.com/deilja/webtelegram/main/ins
 CADDY_INSTALLER_URL="https://raw.githubusercontent.com/deilja/webtelegram/main/install-webproxy-existing-caddy.sh"
 BACKUP_ROOT="/root/webproxy-backups"
 
- die(){ echo "ERROR: $*" >&2; exit 1; }
+die(){ echo "ERROR: $*" >&2; exit 1; }
 log(){ printf '[webproxy] %s\n' "$*"; }
 unit_exists(){ systemctl list-unit-files "$1" >/dev/null 2>&1 && systemctl list-unit-files "$1" 2>/dev/null | grep -q "^${1}[[:space:]]"; }
 listener(){ ss -H -lntp "sport = :$1" 2>/dev/null || true; }
@@ -92,7 +92,8 @@ fi
 
 if (( CADDY_443 )); then
   log "Existing Caddy detected. Creating backup and delegating to existing-Caddy installer."
-  mkdir -p -m 0700 "$BACKUP_ROOT"
+  mkdir -p "$BACKUP_ROOT"
+  chmod 700 "$BACKUP_ROOT"
   if [[ -f /etc/caddy/Caddyfile ]]; then
     cp -a --preserve=mode,ownership /etc/caddy/Caddyfile "$BACKUP_ROOT/Caddyfile.$(date +%Y%m%d-%H%M%S)"
   fi
