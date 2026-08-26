@@ -26,9 +26,50 @@ Upstream `tproxy-server` фиксируется на проверенном comm
 
 ---
 
-## Рекомендуемый способ установки — универсальный
+## Рекомендуемый способ для сервера с 3X-UI
 
-Для нового VPS и рабочего сервера с уже установленным Caddy используйте один установщик:
+Используйте безопасный установщик:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/install-webproxy-3xui-safe.sh -o /root/install-webproxy-3xui-safe.sh
+chmod 700 /root/install-webproxy-3xui-safe.sh
+/root/install-webproxy-3xui-safe.sh
+```
+
+Он сначала определяет:
+
+- 3X-UI / Xray;
+- Caddy;
+- nginx;
+- владельца TCP 80/443.
+
+### Если Xray использует 443
+
+Установщик **останавливается без изменений системы**. Он не меняет Xray, 3X-UI, panel port или `/usr/local/x-ui/bin/config.json`, потому что Caddy и Xray не могут одновременно занимать один TCP 443.
+
+После этого выбирается архитектура:
+
+1. перенести Xray за reverse proxy;
+2. использовать другой публичный порт;
+3. вынести Web Proxy на отдельный VPS/IP.
+
+### Если 443 свободен
+
+Даже при установленном 3X-UI installer использует обычный hardened clean-install path. Xray и 3X-UI не изменяются.
+
+### Если уже работает Caddy
+
+Создаётся backup Caddyfile, после чего используется existing-Caddy installer. Существующие сайты не должны заменяться целиком.
+
+### Если 443 занимает nginx
+
+Автоматического изменения nginx нет. Установщик останавливается, чтобы не сломать production-конфигурацию.
+
+---
+
+## Универсальный способ
+
+Для обычного VPS без необходимости специальной диагностики:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/install-webproxy-universal.sh -o /root/install-webproxy-universal.sh
@@ -36,29 +77,7 @@ chmod 700 /root/install-webproxy-universal.sh
 /root/install-webproxy-universal.sh
 ```
 
-Установщик автоматически определяет состояние сервера:
-
-```text
-Caddy не установлен
-      ↓
-install-webproxy.sh
-      ↓
-устанавливает Caddy + Web Proxy
-```
-
-или:
-
-```text
-Caddy уже работает
-      ↓
-install-webproxy-existing-caddy.sh
-      ↓
-добавляет Web Proxy без замены существующих сайтов
-```
-
-### nginx
-
-Если nginx уже работает, универсальный установщик **останавливается и ничего не изменяет**. Это сделано специально, чтобы не сломать production-сайты.
+Универсальный установщик предназначен для чистого VPS и существующего Caddy. Для VPS с 3X-UI сначала рекомендуется `install-webproxy-3xui-safe.sh`.
 
 ---
 
@@ -72,8 +91,6 @@ chmod 700 /root/install-webproxy.sh
 /root/install-webproxy.sh
 ```
 
-Этот режим устанавливает Caddy самостоятельно.
-
 ### Существующий Caddy
 
 ```bash
@@ -81,27 +98,6 @@ curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/install-web
 chmod 700 /root/install-webproxy-existing-caddy.sh
 /root/install-webproxy-existing-caddy.sh
 ```
-
-Перед изменением Caddy создаётся backup в `/root/webproxy-backups/`.
-
-Основной Caddyfile не заменяется целиком: добавляется отдельный fragment для Web Proxy и выполняется `caddy validate` перед reload.
-
----
-
-## Что проверяет установка
-
-1. root-доступ;
-2. Ubuntu 24.04;
-3. архитектура x86_64;
-4. DNS A;
-5. DNS AAAA, если он существует;
-6. соответствие DNS публичному адресу VPS;
-7. занятость backend-портов;
-8. состояние Caddy/nginx;
-9. UFW;
-10. фиксированный commit `tproxy-server`.
-
-Установщик не забирает 80/443 у уже работающего веб-сервера.
 
 ---
 
@@ -126,39 +122,11 @@ Internet
    +-- TCP 80 --> Caddy / ACME
 ```
 
-Backend-порты `2398`, `8080` и `8081` должны оставаться доступными только локально.
+Backend-порты не должны быть доступны из интернета.
 
 ---
 
-## После установки
-
-```text
-============================================================
-             TELEGRAM WEB PROXY IS READY
-============================================================
-
-Domain:
-  https://proxy.example.com/
-
-Secret:
-  ******************************
-
-Telegram Web Proxy:
-  https://t.me/webproxy?server=proxy.example.com&secret=************************
-
-Status:
-  HTTPS          OK
-  MTProxy        ACTIVE
-  Relay          READY
-  Firewall       ACTIVE
-============================================================
-```
-
-**Secret — чувствительные данные. Не публикуйте его и не помещайте в публичные issue/logs.**
-
----
-
-## Проверка после установки
+## Проверка
 
 ```bash
 systemctl is-active mtproxy
@@ -167,105 +135,36 @@ systemctl is-active caddy
 ss -lntp | grep -E ':(80|443|2398|8080|8081)\b'
 ```
 
-Проверка relay:
+Для диагностики 3X-UI/Xray:
 
 ```bash
-curl -fsS http://127.0.0.1:8081/readyz
-```
-
-Проверка HTTPS:
-
-```bash
-curl -fsSI https://proxy.example.com/
-```
-
----
-
-## Существующий Caddy
-
-Существующие сайты не должны быть перезаписаны.
-
-Перед интеграцией создаётся backup:
-
-```text
-/root/webproxy-backups/<timestamp>/
-```
-
-В случае ошибки reload Caddy installer пытается восстановить исходный Caddyfile.
-
----
-
-## Если порт 80 или 443 занят
-
-```bash
+systemctl status x-ui --no-pager
 ss -lntp | grep -E ':(80|443)\b'
 ```
-
-Для чистой установки занятые 80/443 являются конфликтом. Не останавливайте production-сервис вслепую.
-
----
-
-## UFW
-
-Если UFW активен, должны быть разрешены:
-
-```bash
-ufw allow 80/tcp
-ufw allow 443/tcp
-```
-
-Не открывайте наружу `2398`, `8080` или `8081`.
-
----
-
-## HTML-заглушка
-
-```text
-/srv/tproxy-site/index.html
-```
-
-После изменения страницы перезапуск Caddy обычно не требуется.
-
----
-
-## Удаление
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/uninstall-webproxy.sh -o /tmp/uninstall-webproxy.sh
-chmod 700 /tmp/uninstall-webproxy.sh
-/tmp/uninstall-webproxy.sh
-```
-
-На рабочем сервере перед удалением проверьте, не используются ли Caddy или его конфигурация другими сайтами.
 
 ---
 
 ## Безопасность
 
-- только Ubuntu 24.04 x86_64;
-- root-проверка;
-- DNS-проверки;
-- pinned `tproxy-server` commit;
-- SHA-512 проверка Caddy;
-- отдельные systemd users;
-- systemd hardening;
-- секреты с ограниченными правами;
-- backend только localhost;
-- backup существующего Caddy;
-- `caddy validate` перед reload;
-- nginx автоматически не изменяется.
+Установщики:
+
+- работают только от root;
+- ограничены Ubuntu 24.04 x86_64;
+- проверяют DNS до установки;
+- фиксируют upstream `tproxy-server` на commit;
+- проверяют SHA-512 Caddy;
+- используют отдельные systemd users;
+- держат backend на localhost;
+- не останавливают Xray/3X-UI автоматически;
+- не заменяют `/usr/local/x-ui/bin/config.json`;
+- останавливаются при опасном конфликте 80/443;
+- создают backup перед интеграцией с существующим Caddy.
 
 ---
 
 ## CI
 
-GitHub Actions выполняет:
-
-- `bash -n`;
-- ShellCheck;
-- статические security-проверки.
-
-Перед production-установкой проверяйте последний успешный workflow.
+GitHub Actions проверяет shell-синтаксис, ShellCheck, security assertions и production-сценарии.
 
 ---
 
