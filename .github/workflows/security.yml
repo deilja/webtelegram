@@ -1,0 +1,31 @@
+name: Installer security
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+      - name: ShellCheck installer
+        run: shellcheck -x -S warning install-webproxy.sh uninstall-webproxy.sh
+
+  static-security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject floating upstream clone
+        run: |
+          ! grep -nE 'git clone( |.* )https://github\.com/telegramdesktop/tproxy-server\.git([[:space:]]|$)' install-webproxy.sh
+      - name: Reject unsafe curl-to-shell patterns
+        run: |
+          ! grep -nE 'curl[^\n|]*\|[[:space:]]*(bash|sh)|wget[^\n|]*\|[[:space:]]*(bash|sh)' install-webproxy.sh
+      - name: Check installer syntax
+        run: bash -n install-webproxy.sh
