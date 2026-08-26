@@ -1,0 +1,102 @@
+name: Production installer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*.sh'
+      - '.github/workflows/production.yml'
+  pull_request:
+    paths:
+      - '*.sh'
+      - '.github/workflows/production.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax
+        run: |
+          set -euo pipefail
+          for f in ./*.sh; do
+            bash -n "$f"
+          done
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          severity: warning
+
+  installer-safety:
+    name: Installer safety checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static safety assertions
+        run: |
+          set -euo pipefail
+          for f in ./*.sh; do
+            ! grep -nE '(^|[^A-Za-z])(curl|wget)[^\n]*\|[^\n]*(bash|sh)([^A-Za-z]|$)' "$f"
+            ! grep -nE 'git clone[^\n]*tproxy-server[^\n]*(main|master)' "$f"
+          done
+          grep -q 'set -Eeuo pipefail' install-webproxy.sh
+          grep -q '52a5feb7fac38f68da5afef9cedd9b3bfc8473ca' install-webproxy.sh
+          grep -q 'sha512' install-webproxy.sh
+          grep -q '2398' install-webproxy.sh
+
+  existing-caddy:
+    name: Existing Caddy safety
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate existing-Caddy installer invariants
+        run: |
+          set -euo pipefail
+          test -f install-webproxy-existing-caddy.sh
+          bash -n install-webproxy-existing-caddy.sh
+          grep -q 'caddy validate' install-webproxy-existing-caddy.sh
+          grep -q 'systemctl reload caddy' install-webproxy-existing-caddy.sh
+          grep -q 'webproxy-backups' install-webproxy-existing-caddy.sh
+          ! grep -nE 'systemctl (stop|disable) caddy' install-webproxy-existing-caddy.sh
+
+  integration-scenarios:
+    name: Production scenarios
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - clean
+          - existing-caddy
+          - port-conflict
+          - nginx-conflict
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run scenario assertions
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -euo pipefail
+          case "$SCENARIO" in
+            clean)
+              ! grep -nE 'rm -rf[[:space:]]+\$[A-Za-z_][A-Za-z0-9_]*($|[^A-Za-z0-9_])' install-webproxy.sh
+              ;;
+            existing-caddy)
+              grep -q 'REUSE_CADDY' install-webproxy.sh || true
+              grep -q 'backup' install-webproxy-existing-caddy.sh
+              ;;
+            port-conflict)
+              grep -q '80' install-webproxy.sh
+              grep -q '443' install-webproxy.sh
+              grep -q 'ss ' install-webproxy.sh
+              ;;
+            nginx-conflict)
+              grep -qi 'nginx' install-webproxy.sh
+              ;;
+          esac
