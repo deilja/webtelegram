@@ -2,14 +2,14 @@
 set -Eeuo pipefail
 umask 077
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 TPROXY_COMMIT="52a5feb7fac38f68da5afef9cedd9b3bfc8473ca"
 TPROXY_REPO="https://github.com/telegramdesktop/tproxy-server.git"
 REPO_DIR="/root/tproxy-server"
 SITE_INPUT="/opt/tproxy-site"
 SITE_TARGET="/srv/tproxy-site"
 
-die(){ echo "ERROR: $*" >&2; exit 1; }
+ die(){ echo "ERROR: $*" >&2; exit 1; }
 trim(){ local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
 valid_domain(){
   local d="$1" label
@@ -24,7 +24,7 @@ valid_email(){ [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]];
 valid_secret(){ [[ "$1" =~ ^([0-9a-f]{32}|dd[0-9a-f]{32})$ ]]; }
 port_listener(){ ss -H -lnt "sport = :$1" 2>/dev/null | grep -q .; }
 port_owner(){ ss -H -lntp "sport = :$1" 2>/dev/null || true; }
-require_free(){ local p="$1"; port_listener "$p" && { port_owner "$p"; die "Port $p is already in use. Stop the conflicting service first."; } || true; }
+require_free(){ local p="$1"; if port_listener "$p"; then port_owner "$p"; die "Port $p is already in use. Stop the conflicting service first."; fi; }
 cleanup_tmp(){ rm -f "${CADDY_ARCHIVE:-}" "${TPROXY_ARCHIVE:-}"; rm -rf "${CADDY_DIR:-}" "${TPROXY_DIR:-}"; }
 trap cleanup_tmp EXIT
 
@@ -32,6 +32,10 @@ trap cleanup_tmp EXIT
 [[ "$(uname -m)" == x86_64 ]] || die "Ubuntu 24.04 x86_64 is required."
 . /etc/os-release
 [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04 ]] || die "Ubuntu 24.04 is required."
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends ca-certificates curl git openssl dnsutils nftables build-essential golang-go libssl-dev util-linux zlib1g-dev tar iproute2
 
 while true; do
   read -r -p "Domain (example: proxy.example.com): " DOMAIN
@@ -46,7 +50,6 @@ done
 read -r -p "Generate a secure secret automatically? [Y/n]: " MODE
 MODE="$(trim "${MODE:-Y}")"
 if [[ -z "$MODE" || "$MODE" =~ ^[Yy]$ ]]; then
-  command -v openssl >/dev/null 2>&1 || { apt-get update; apt-get install -y --no-install-recommends openssl; }
   SECRET="$(openssl rand -hex 16)"
 else
   while true; do
@@ -56,18 +59,14 @@ else
 fi
 valid_secret "$SECRET" || die "Invalid secret."
 
-# Refuse to silently replace an existing HTTP stack.
+# This installer is production-safe but intentionally does not take ownership of an existing HTTP stack.
 for p in 80 443 2398 8080 8081; do require_free "$p"; done
 if systemctl list-unit-files caddy.service 2>/dev/null | grep -q '^caddy.service'; then
-  die "Caddy is already installed. This installer does not overwrite an existing Caddy deployment."
+  die "Caddy is already installed. Use a dedicated VPS or configure the existing Caddy deployment manually."
 fi
 if systemctl list-unit-files 'nginx.service' 2>/dev/null | grep -q '^nginx.service'; then
-  die "nginx is installed. Stop/uninstall it or configure this proxy manually."
+  die "nginx is installed. Use a dedicated VPS or configure nginx manually."
 fi
-
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl git openssl dnsutils nftables build-essential golang-go libssl-dev util-linux zlib1g-dev tar
 
 A_RECORDS="$(getent ahostsv4 "$DOMAIN" | awk '{print $1}' | sort -u)"
 [[ -n "$A_RECORDS" ]] || die "No IPv4 A record found for $DOMAIN."
@@ -84,8 +83,12 @@ if getent ahostsv6 "$DOMAIN" >/dev/null 2>&1; then
   fi
 fi
 
-# Fetch only the audited upstream commit; never execute floating master/main code.
-rm -rf "$REPO_DIR"
+# Never destroy an old checkout. Keep a timestamped backup before replacing it.
+if [[ -e "$REPO_DIR" ]]; then
+  BACKUP_DIR="${REPO_DIR}.backup.$(date +%Y%m%d-%H%M%S)"
+  mv -- "$REPO_DIR" "$BACKUP_DIR"
+  echo "Previous source checkout moved to $BACKUP_DIR"
+fi
 mkdir -p "$REPO_DIR"
 git -C "$REPO_DIR" init -q
 git -C "$REPO_DIR" remote add origin "$TPROXY_REPO"
@@ -108,14 +111,14 @@ chmod 0755 "$MTPROXY_INSTALL"
 "$MTPROXY_INSTALL"
 
 id tproxy >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin tproxy
-
 cd "$REPO_DIR"
 go version
 go build -trimpath -ldflags='-s -w' -o /usr/local/bin/tproxy-server ./cmd/tproxy-server
 chown root:root /usr/local/bin/tproxy-server; chmod 0755 /usr/local/bin/tproxy-server
 
 install -d -o root -g tproxy -m 0750 "$SITE_TARGET"
-rm -rf "$SITE_TARGET"/*
+# SITE_TARGET is a fixed absolute path and the parameter expansion prevents an empty-path rm.
+rm -rf -- "${SITE_TARGET:?}"/*
 cp -a "$SITE_INPUT/." "$SITE_TARGET/"
 chown -R root:tproxy "$SITE_TARGET"
 find "$SITE_TARGET" -type d -exec chmod 0750 {} +
