@@ -64,13 +64,32 @@ jobs:
           grep -q 'webproxy-backups' install-webproxy-existing-caddy.sh
           ! grep -nE 'systemctl (stop|disable) caddy' install-webproxy-existing-caddy.sh
 
+  xui-safe:
+    name: 3X-UI/Xray safety
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate 3X-UI safe installer invariants
+        run: |
+          set -euo pipefail
+          test -f install-webproxy-3xui-safe.sh
+          bash -n install-webproxy-3xui-safe.sh
+          grep -q 'XUI_FOUND' install-webproxy-3xui-safe.sh
+          grep -q 'XUI_443' install-webproxy-3xui-safe.sh
+          grep -q 'SAFE STOP' install-webproxy-3xui-safe.sh
+          grep -q 'TCP 443 is occupied by an unknown service' install-webproxy-3xui-safe.sh
+          grep -q 'No system changes were made after detection' install-webproxy-3xui-safe.sh
+          ! grep -nE 'systemctl (stop|disable) (x-ui|xray)' install-webproxy-3xui-safe.sh
+          ! grep -nE '(^|[[:space:];])rm[[:space:]]+-rf[[:space:]]+/(usr/local/x-ui|etc/x-ui|opt/3x-ui)' install-webproxy-3xui-safe.sh
+          ! grep -nE '(^|[[:space:];])(sed|perl|python3?)[[:space:]].*(x-ui|xray|config\.json)' install-webproxy-3xui-safe.sh
+
   integration-scenarios:
     name: Production scenarios
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        scenario: [clean, existing-caddy, port-conflict, nginx-conflict]
+        scenario: [clean, existing-caddy, port-conflict, nginx-conflict, 3xui-443]
     steps:
       - uses: actions/checkout@v4
       - name: Run scenario assertions
@@ -92,5 +111,12 @@ jobs:
               ;;
             nginx-conflict)
               grep -qi 'nginx' install-webproxy.sh
+              ;;
+            3xui-443)
+              grep -q 'XUI_443=1' install-webproxy-3xui-safe.sh
+              grep -q 'exit 2' install-webproxy-3xui-safe.sh
+              grep -q 'No system changes were made after detection' install-webproxy-3xui-safe.sh
+              ! grep -nE 'systemctl (stop|disable|restart) (x-ui|xray)' install-webproxy-3xui-safe.sh
+              ! grep -nE '(^|[[:space:];])(sed|perl|python3?)[[:space:]].*(/usr/local/x-ui/bin/config\.json|xray)' install-webproxy-3xui-safe.sh
               ;;
           esac
