@@ -18,31 +18,53 @@ Upstream `tproxy-server` фиксируется на проверенном comm
 
 ## Требования
 
-### Вариант A — новый VPS
-
 - Ubuntu 24.04 x86_64
 - root-доступ
 - домен или поддомен
 - DNS A-запись на IPv4 VPS
-- порты TCP 80 и 443 свободны
-
-### Вариант B — рабочий сервер с существующим Caddy
-
-Используйте отдельный установщик:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/install-webproxy-existing-caddy.sh -o /root/install-webproxy-existing-caddy.sh
-chmod 700 /root/install-webproxy-existing-caddy.sh
-/root/install-webproxy-existing-caddy.sh
-```
-
-Он не заменяет основной Caddyfile и выполняет reload Caddy после добавления отдельной конфигурации. Перед изменениями создаётся backup.
-
-> Если сервер использует nginx вместо Caddy, этот режим не применяется. Не заменяйте nginx автоматически: сначала добавьте отдельный reverse-proxy location вручную или используйте специальный nginx-интегратор.
+- TCP 80/443 должны быть доступны для нового публичного hostname
 
 ---
 
-## Быстрая установка на чистый VPS
+## Рекомендуемый способ установки — универсальный
+
+Для нового VPS и рабочего сервера с уже установленным Caddy используйте один установщик:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/install-webproxy-universal.sh -o /root/install-webproxy-universal.sh
+chmod 700 /root/install-webproxy-universal.sh
+/root/install-webproxy-universal.sh
+```
+
+Установщик автоматически определяет состояние сервера:
+
+```text
+Caddy не установлен
+      ↓
+install-webproxy.sh
+      ↓
+устанавливает Caddy + Web Proxy
+```
+
+или:
+
+```text
+Caddy уже работает
+      ↓
+install-webproxy-existing-caddy.sh
+      ↓
+добавляет Web Proxy без замены существующих сайтов
+```
+
+### nginx
+
+Если nginx уже работает, универсальный установщик **останавливается и ничего не изменяет**. Это сделано специально, чтобы не сломать production-сайты.
+
+---
+
+## Ручные варианты
+
+### Чистый VPS без Caddy
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/install-webproxy.sh -o /root/install-webproxy.sh
@@ -50,21 +72,23 @@ chmod 700 /root/install-webproxy.sh
 /root/install-webproxy.sh
 ```
 
-Установщик запросит:
+Этот режим устанавливает Caddy самостоятельно.
 
-```text
-Domain (example: proxy.example.com):
-ACME email:
-Generate a secure secret automatically? [Y/n]:
+### Существующий Caddy
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/deilja/webtelegram/main/install-webproxy-existing-caddy.sh -o /root/install-webproxy-existing-caddy.sh
+chmod 700 /root/install-webproxy-existing-caddy.sh
+/root/install-webproxy-existing-caddy.sh
 ```
 
-Секрет рекомендуется генерировать автоматически.
+Перед изменением Caddy создаётся backup в `/root/webproxy-backups/`.
+
+Основной Caddyfile не заменяется целиком: добавляется отдельный fragment для Web Proxy и выполняется `caddy validate` перед reload.
 
 ---
 
-## Что проверяет установщик
-
-Перед изменением системы выполняются проверки:
+## Что проверяет установка
 
 1. root-доступ;
 2. Ubuntu 24.04;
@@ -72,12 +96,12 @@ Generate a secure secret automatically? [Y/n]:
 4. DNS A;
 5. DNS AAAA, если он существует;
 6. соответствие DNS публичному адресу VPS;
-7. занятость портов;
-8. наличие Caddy/nginx;
+7. занятость backend-портов;
+8. состояние Caddy/nginx;
 9. UFW;
-10. контрольная версия upstream `tproxy-server`.
+10. фиксированный commit `tproxy-server`.
 
-Установщик не пытается забрать 80/443 у уже работающего веб-сервера.
+Установщик не забирает 80/443 у уже работающего веб-сервера.
 
 ---
 
@@ -102,13 +126,11 @@ Internet
    +-- TCP 80 --> Caddy / ACME
 ```
 
-Backend-порты не должны быть доступны из интернета.
+Backend-порты `2398`, `8080` и `8081` должны оставаться доступными только локально.
 
 ---
 
 ## После установки
-
-При успешной установке отображаются:
 
 ```text
 ============================================================
@@ -145,15 +167,7 @@ systemctl is-active caddy
 ss -lntp | grep -E ':(80|443|2398|8080|8081)\b'
 ```
 
-Ожидаемая модель:
-
-- `80/tcp` — Caddy;
-- `443/tcp` — Caddy;
-- `2398/tcp` — только localhost;
-- `8080/tcp` — только localhost;
-- `8081/tcp` — только localhost.
-
-Проверка локального relay:
+Проверка relay:
 
 ```bash
 curl -fsS http://127.0.0.1:8081/readyz
@@ -169,41 +183,25 @@ curl -fsSI https://proxy.example.com/
 
 ## Существующий Caddy
 
-Используйте:
+Существующие сайты не должны быть перезаписаны.
+
+Перед интеграцией создаётся backup:
 
 ```text
-install-webproxy-existing-caddy.sh
+/root/webproxy-backups/<timestamp>/
 ```
 
-Принцип:
-
-```text
-Существующий Caddy
-        |
-        +-- существующие сайты остаются без изменений
-        |
-        +-- новый host --> tproxy-server :8080
-```
-
-Перед изменением Caddy создаётся backup в:
-
-```text
-/root/webproxy-backups/
-```
-
-Основной Caddyfile не заменяется целиком.
+В случае ошибки reload Caddy installer пытается восстановить исходный Caddyfile.
 
 ---
 
 ## Если порт 80 или 443 занят
 
-Проверить:
-
 ```bash
 ss -lntp | grep -E ':(80|443)\b'
 ```
 
-Для чистой установки это ожидаемая причина остановки. Не останавливайте работающий production-сервис вслепую.
+Для чистой установки занятые 80/443 являются конфликтом. Не останавливайте production-сервис вслепую.
 
 ---
 
@@ -216,21 +214,17 @@ ufw allow 80/tcp
 ufw allow 443/tcp
 ```
 
-Не открывайте наружу backend-порты `2398`, `8080` и `8081`.
+Не открывайте наружу `2398`, `8080` или `8081`.
 
 ---
 
 ## HTML-заглушка
 
-Основная страница:
-
 ```text
 /srv/tproxy-site/index.html
 ```
 
-После изменения файла перезапуск Caddy обычно не требуется.
-
-Не меняйте владельца и права на произвольные значения: установщик использует отдельного системного пользователя для доступа к файлам.
+После изменения страницы перезапуск Caddy обычно не требуется.
 
 ---
 
@@ -242,39 +236,36 @@ chmod 700 /tmp/uninstall-webproxy.sh
 /tmp/uninstall-webproxy.sh
 ```
 
-Перед удалением обязательно проверьте, не используется ли Caddy другими сайтами.
+На рабочем сервере перед удалением проверьте, не используются ли Caddy или его конфигурация другими сайтами.
 
 ---
 
 ## Безопасность
 
-Установщик:
-
-- работает только от root;
-- ограничен Ubuntu 24.04 x86_64;
-- проверяет DNS до установки;
-- фиксирует upstream `tproxy-server` на commit;
-- проверяет SHA-512 архива Caddy;
-- использует отдельные systemd users;
-- применяет systemd hardening;
-- хранит секреты с ограниченными правами;
-- держит backend на localhost;
-- не перезаписывает существующий nginx/Caddy в режиме чистой установки;
-- сохраняет backup при интеграции с существующим Caddy.
-
-Не запускайте непроверенные копии installer от сторонних лиц.
+- только Ubuntu 24.04 x86_64;
+- root-проверка;
+- DNS-проверки;
+- pinned `tproxy-server` commit;
+- SHA-512 проверка Caddy;
+- отдельные systemd users;
+- systemd hardening;
+- секреты с ограниченными правами;
+- backend только localhost;
+- backup существующего Caddy;
+- `caddy validate` перед reload;
+- nginx автоматически не изменяется.
 
 ---
 
 ## CI
 
-Для shell-кода проекта используется GitHub Actions с:
+GitHub Actions выполняет:
 
 - `bash -n`;
 - ShellCheck;
-- статическими security-проверками.
+- статические security-проверки.
 
-Перед production-релизом проверяйте последний успешный workflow.
+Перед production-установкой проверяйте последний успешный workflow.
 
 ---
 
