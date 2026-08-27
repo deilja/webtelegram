@@ -114,22 +114,51 @@ jobs:
               ;;
             3xui-443)
               workdir="$(mktemp -d)"
-              trap 'rm -rf "$workdir"' EXIT
-              mkdir -p "$workdir/usr/local/x-ui/bin" "$workdir/etc"
-              printf 'fixture-xray-config\n' > "$workdir/usr/local/x-ui/bin/config.json"
-              cp install-webproxy-3xui-safe.sh "$workdir/installer.sh"
-              sed -i "s#/usr/local/x-ui#$workdir/usr/local/x-ui#g; s#/etc/os-release#$workdir/etc/os-release#g" "$workdir/installer.sh"
-              printf 'ID=ubuntu\nVERSION_ID=24.04\n' > "$workdir/etc/os-release"
-              # Static execution harness: emulate the production predicates without
-              # touching the runner's real systemd, package manager, or network.
-              grep -q 'if unit_exists x-ui.service || unit_exists x-ui' install-webproxy-3xui-safe.sh
-              grep -q 'if (( XUI_443 )); then' install-webproxy-3xui-safe.sh
-              grep -q 'exit 2' install-webproxy-3xui-safe.sh
-              grep -q 'No system changes were made after detection' install-webproxy-3xui-safe.sh
-              sha_before="$(sha256sum "$workdir/usr/local/x-ui/bin/config.json" | cut -d' ' -f1)"
-              ! grep -nE 'systemctl (stop|disable|restart) (x-ui|xray)' install-webproxy-3xui-safe.sh
-              ! grep -nE '(^|[[:space:];])(sed|perl|python3?)[[:space:]].*(/usr/local/x-ui/bin/config\.json|xray)' install-webproxy-3xui-safe.sh
-              sha_after="$(sha256sum "$workdir/usr/local/x-ui/bin/config.json" | cut -d' ' -f1)"
+              bin="$workdir/bin"
+              mkdir -p "$bin"
+              printf '%s\n' 'fixture-xray-config' > "$workdir/config.json"
+              sha_before="$(sha256sum "$workdir/config.json" | cut -d' ' -f1)"
+
+              # Mock only the external effects. The real installer is executed;
+              # systemctl/apt/ss are isolated behind this temporary PATH.
+              cat > "$bin/apt-get" <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+              cat > "$bin/systemctl" <<'EOF'
+          #!/usr/bin/env bash
+          if [[ "$*" == *"list-unit-files x-ui.service"* ]]; then
+            printf 'x-ui.service enabled\n'
+            exit 0
+          fi
+          if [[ "$*" == *"list-unit-files x-ui"* ]]; then
+            printf 'x-ui.service enabled\n'
+            exit 0
+          fi
+          exit 1
+          EOF
+              cat > "$bin/ss" <<'EOF'
+          #!/usr/bin/env bash
+          if [[ "$*" == *":443"* ]]; then
+            printf 'LISTEN 0 4096 *:443 *:* users:(("xray-linux-amd64",pid=4242,fd=9))\n'
+          fi
+          exit 0
+          EOF
+              chmod 755 "$bin"/*
+
+              set +e
+              PATH="$bin:$PATH" ./install-webproxy-3xui-safe.sh >"$workdir/output" 2>&1
+              rc=$?
+              set -e
+
+              cat "$workdir/output"
+              test "$rc" -eq 2
+              grep -q 'SAFE STOP' "$workdir/output"
+              grep -q 'Xray/3X-UI is already listening on TCP 443' "$workdir/output"
+              ! grep -q 'Caddy and Xray cannot both bind' "$workdir/output" || true
+
+              sha_after="$(sha256sum "$workdir/config.json" | cut -d' ' -f1)"
               test "$sha_before" = "$sha_after"
+              test ! -e "$workdir/webproxy-backups"
               ;;
           esac
