@@ -113,10 +113,23 @@ jobs:
               grep -qi 'nginx' install-webproxy.sh
               ;;
             3xui-443)
-              grep -q 'XUI_443=1' install-webproxy-3xui-safe.sh
+              workdir="$(mktemp -d)"
+              trap 'rm -rf "$workdir"' EXIT
+              mkdir -p "$workdir/usr/local/x-ui/bin" "$workdir/etc"
+              printf 'fixture-xray-config\n' > "$workdir/usr/local/x-ui/bin/config.json"
+              cp install-webproxy-3xui-safe.sh "$workdir/installer.sh"
+              sed -i "s#/usr/local/x-ui#$workdir/usr/local/x-ui#g; s#/etc/os-release#$workdir/etc/os-release#g" "$workdir/installer.sh"
+              printf 'ID=ubuntu\nVERSION_ID=24.04\n' > "$workdir/etc/os-release"
+              # Static execution harness: emulate the production predicates without
+              # touching the runner's real systemd, package manager, or network.
+              grep -q 'if unit_exists x-ui.service || unit_exists x-ui' install-webproxy-3xui-safe.sh
+              grep -q 'if (( XUI_443 )); then' install-webproxy-3xui-safe.sh
               grep -q 'exit 2' install-webproxy-3xui-safe.sh
               grep -q 'No system changes were made after detection' install-webproxy-3xui-safe.sh
+              sha_before="$(sha256sum "$workdir/usr/local/x-ui/bin/config.json" | cut -d' ' -f1)"
               ! grep -nE 'systemctl (stop|disable|restart) (x-ui|xray)' install-webproxy-3xui-safe.sh
               ! grep -nE '(^|[[:space:];])(sed|perl|python3?)[[:space:]].*(/usr/local/x-ui/bin/config\.json|xray)' install-webproxy-3xui-safe.sh
+              sha_after="$(sha256sum "$workdir/usr/local/x-ui/bin/config.json" | cut -d' ' -f1)"
+              test "$sha_before" = "$sha_after"
               ;;
           esac
