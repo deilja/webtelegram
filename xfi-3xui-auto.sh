@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 BACKUP_ROOT="/root/webproxy-backups"
 STATE_DIR="/etc/webproxy"
 ENV_FILE="$STATE_DIR/3xui.env"
@@ -22,6 +22,7 @@ chmod 700 "$STATE_DIR" "$BACKUP_ROOT"
 
 api_url="${XUI_API_URL:-}"
 api_token="${XUI_API_TOKEN:-}"
+mode="${1:-plan}"
 
 load_env(){
   if [[ -f "$ENV_FILE" ]]; then
@@ -53,13 +54,9 @@ prompt_config(){
 api(){
   local method="$1" path="$2" data="${3:-}"
   local url="${api_url%/}${path}"
-  if [[ -n "$data" ]]; then
-    curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
-      -X "$method" -H "Authorization: Bearer $api_token" -H 'Content-Type: application/json' --data "$data" "$url"
-  else
-    curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
-      -X "$method" -H "Authorization: Bearer $api_token" "$url"
-  fi
+  local args=(--fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 -X "$method" -H "Authorization: Bearer $api_token")
+  [[ -n "$data" ]] && args+=(-H 'Content-Type: application/json' --data "$data")
+  curl "${args[@]}" "$url"
 }
 
 fetch_inbounds(){
@@ -88,12 +85,34 @@ show(){
   jq -r '.obj[] | [(.id // "-"),(.remark // "-"),(.protocol // "-"),(.port // "-"),(.listen // "0.0.0.0")] | @tsv' "$STATE_DIR/inbounds.json"
 }
 
+classify(){
+  jq '[.obj[] | {
+    id,
+    remark,
+    protocol,
+    port,
+    listen:(.listen // "0.0.0.0"),
+    streamSettings:(.streamSettings // {}),
+    security:((.streamSettings // {}).security // "none"),
+    network:((.streamSettings // {}).network // "tcp")
+  }] | map(. + {risk:(
+    if .security == "reality" then "HIGH_REALITY"
+    elif .network == "ws" and .security == "tls" then "CADDY_WS_TLS_CANDIDATE"
+    elif .network == "grpc" and .security == "tls" then "GRPC_REQUIRES_EXPLICIT_ROUTING"
+    elif .network == "tcp" and (.security == "tls" or .security == "none") then "TCP_REQUIRES_EXPLICIT_ROUTING"
+    else "REVIEW_REQUIRED" end
+  )})' "$STATE_DIR/inbounds.json" > "$STATE_DIR/classified.json"
+  chmod 600 "$STATE_DIR/classified.json"
+}
+
 make_plan(){
-  local external_port=443 xray443_count
+  local external_port=443 xray443_count safe_candidates unsafe
   xray443_count="$(jq '[.obj[] | select((.port|tonumber?) == 443)] | length' "$STATE_DIR/inbounds.json")"
-  jq --argjson port "$external_port" --argjson count "$xray443_count" \
-    '{version:1, external_port:$port, current_inbounds:.obj, current_443_count:$count, action:"DRY_RUN_ONLY", apply:false, warning:"Do not assign multiple public inbounds to the same socket. A single 443 requires explicit transport/routing design."}' \
-    "$STATE_DIR/inbounds.json" > "$PLAN_FILE"
+  safe_candidates="$(jq '[.[] | select(.risk == "CADDY_WS_TLS_CANDIDATE")] | length' "$STATE_DIR/classified.json")"
+  unsafe="$(jq '[.[] | select(.risk != "CADDY_WS_TLS_CANDIDATE")] | length' "$STATE_DIR/classified.json")"
+  jq --argjson port "$external_port" --argjson count "$xray443_count" --argjson candidates "$safe_candidates" --argjson unsafe "$unsafe" \
+    '{version:2, external_port:$port, current_inbounds:.obj, classified:(input), current_443_count:$count, caddy_ws_tls_candidates:$candidates, review_required:$unsafe, action:"PLAN_ONLY", apply_allowed:false, reasons:["Multiple public inbounds cannot share one socket.","Reality/RAW TCP/GRPC require explicit protocol-aware routing.","Standard Caddy cannot proxy arbitrary Xray TCP/Reality inbounds without a suitable layer-4 design."]}' \
+    "$STATE_DIR/inbounds.json" "$STATE_DIR/classified.json" > "$PLAN_FILE"
   chmod 600 "$PLAN_FILE"
 }
 
@@ -105,28 +124,35 @@ validate_xray(){
   return 2
 }
 
+status(){
+  log 'Local listeners:'
+  ss -lntp 2>/dev/null | grep -E ':(80|443)[[:space:]]' || true
+  log 'x-ui:'
+  systemctl is-active x-ui 2>/dev/null || true
+}
+
+apply_guard(){
+  die "APPLY is intentionally blocked until a protocol-specific routing plan has been generated and approved. Use: $0 plan"
+}
+
 main(){
-  log "Automated 3X-UI manager $VERSION"
+  case "$mode" in
+    plan|apply) ;;
+    *) die "Usage: $0 [plan|apply]" ;;
+  esac
+  log "Automated 3X-UI manager $VERSION ($mode)"
   prompt_config
   fetch_inbounds
   backup_dir="$(backup)"
   log "Backup: $backup_dir"
   show
+  classify
   make_plan
   log "Migration plan: $PLAN_FILE"
-  log "No inbound changes were applied."
-  if ss -lntp 2>/dev/null | grep -E ':(443)[[:space:]]' >/dev/null; then
-    log "TCP 443 is currently occupied; no automatic takeover is attempted."
-  else
-    log "TCP 443 is currently free."
-  fi
+  status
   if validate_xray; then log "Current Xray configuration: valid"; else log "Current Xray configuration: validation unavailable or failed; no changes made."; fi
-  cat <<'EOF'
-
-SAFE MODE:
-This release only discovers, backs up and plans. It does not rewrite 3X-UI/Xray inbounds.
-The apply phase must be implemented with protocol-aware routing, transactional validation and rollback.
-EOF
+  if [[ "$mode" == "apply" ]]; then apply_guard; fi
+  log "No inbound changes were applied."
 }
 
 main "$@"
